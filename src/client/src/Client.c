@@ -34,7 +34,9 @@ STATUS checkIntermittentProducerCallback(UINT32 timerId, UINT64 currentTime, UIN
     STATUS retStatus = STATUS_SUCCESS;
     PKinesisVideoClient pKinesisVideoClient = (PKinesisVideoClient) customData;
     UINT32 i;
+    BOOL frameOrderCoordinatorLocked = FALSE;
     PKinesisVideoStream pCurrStream = NULL;
+    PFrameOrderCoordinator pFrameOrderCoordinator = NULL;
     Frame eofr = EOFR_FRAME_INITIALIZER;
 
     CHK(pKinesisVideoClient, STATUS_NULL_ARG);
@@ -55,6 +57,13 @@ STATUS checkIntermittentProducerCallback(UINT32 timerId, UINT64 currentTime, UIN
         for (i = 0; i < pKinesisVideoClient->deviceInfo.streamCount; i++) {
             if (NULL != pKinesisVideoClient->streams[i]) {
                 pCurrStream = pKinesisVideoClient->streams[i];
+                pFrameOrderCoordinator = pCurrStream->pFrameOrderCoordinator;
+                if (pCurrStream->streamInfo.streamCaps.frameOrderingMode != FRAME_ORDER_MODE_PASS_THROUGH) {
+                    // In the case that frameOrderingMode = FRAME_ORDER_MODE_PASS_THROUGH, pFrameOrderCoordinator is NULL
+                    // so we will segfault, so the check for the frameOrderingMode is important
+                    pKinesisVideoClient->clientCallbacks.lockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pFrameOrderCoordinator->lock);
+                    frameOrderCoordinatorLocked = TRUE;
+                }
                 // Lock the Stream
                 pKinesisVideoClient->clientCallbacks.lockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pCurrStream->base.lock);
                 // Check if last PutFrame is older than max timeout, if so, send EoFR, if not, do nothing
@@ -69,14 +78,80 @@ STATUS checkIntermittentProducerCallback(UINT32 timerId, UINT64 currentTime, UIN
 
                 // Unlock the Stream
                 pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pCurrStream->base.lock);
+                if (frameOrderCoordinatorLocked) {
+                    pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pFrameOrderCoordinator->lock);
+                }
             }
         }
-
         pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoClient->base.streamListLock);
     }
 
 CleanUp:
     CHK_LOG_ERR(retStatus);
+
+    LEAVES();
+    return retStatus;
+}
+
+STATUS setupDefaultKvsRetryStrategyParameters(PKinesisVideoClient pKinesisVideoClient) {
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    PKvsRetryStrategyCallbacks pKvsRetryStrategyCallbacks = &(pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategyCallbacks);
+
+    // Use default as exponential backoff wait
+    pKvsRetryStrategyCallbacks->createRetryStrategyFn = exponentialBackoffRetryStrategyCreate;
+    pKvsRetryStrategyCallbacks->freeRetryStrategyFn = exponentialBackoffRetryStrategyFree;
+    pKvsRetryStrategyCallbacks->executeRetryStrategyFn = getExponentialBackoffRetryStrategyWaitTime;
+    pKvsRetryStrategyCallbacks->getCurrentRetryAttemptNumberFn = getExponentialBackoffRetryCount;
+
+    // Use exponential backoff config for state machine
+    pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategy.pRetryStrategyConfig = (PRetryStrategyConfig)&DEFAULT_STATE_MACHINE_EXPONENTIAL_BACKOFF_RETRY_CONFIGURATION;
+
+CleanUp:
+    LEAVES();
+    return retStatus;
+}
+
+STATUS configureClientWithRetryStrategy(PKinesisVideoClient pKinesisVideoClient) {
+    ENTERS();
+    PRetryStrategy pRetryStrategy = NULL;
+    STATUS retStatus = STATUS_SUCCESS;
+    KVS_RETRY_STRATEGY_TYPE defaultKvsRetryStrategyType = KVS_RETRY_STRATEGY_EXPONENTIAL_BACKOFF_WAIT;
+    PKvsRetryStrategyCallbacks pKvsRetryStrategyCallbacks = NULL;
+
+    CHK(pKinesisVideoClient != NULL, STATUS_NULL_ARG);
+    pKvsRetryStrategyCallbacks = &(pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategyCallbacks);
+
+    // If the callbacks for retry strategy are already set, then use that otherwise
+    // build the client with a default retry strategy.
+    if (pKvsRetryStrategyCallbacks->createRetryStrategyFn == NULL ||
+        pKvsRetryStrategyCallbacks->freeRetryStrategyFn == NULL ||
+        pKvsRetryStrategyCallbacks->executeRetryStrategyFn == NULL ||
+        pKvsRetryStrategyCallbacks->getCurrentRetryAttemptNumberFn == NULL) {
+
+        CHK_STATUS(setupDefaultKvsRetryStrategyParameters(pKinesisVideoClient));
+    }
+
+    CHK_STATUS(pKvsRetryStrategyCallbacks->createRetryStrategyFn(&(pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategy)));
+
+CleanUp:
+
+    LEAVES();
+    return retStatus;
+}
+
+STATUS freeClientRetryStrategy(PKinesisVideoClient pKinesisVideoClient) {
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+
+    CHK(pKinesisVideoClient != NULL &&
+            pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategyCallbacks.freeRetryStrategyFn != NULL, STATUS_SUCCESS);
+
+    CHK_STATUS(pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategyCallbacks.freeRetryStrategyFn(
+            &(pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategy)));
+    pKinesisVideoClient->deviceInfo.clientInfo.kvsRetryStrategy.pRetryStrategy = NULL;
+
+CleanUp:
 
     LEAVES();
     return retStatus;
@@ -151,6 +226,8 @@ STATUS createKinesisVideoClient(PDeviceInfo pDeviceInfo, PClientCallbacks pClien
     // sentinel value in case of an earlier version of the structure
     // is used and the remaining fields are not copied
     fixupDeviceInfo(&pKinesisVideoClient->deviceInfo, pDeviceInfo);
+
+    CHK_STATUS(configureClientWithRetryStrategy(pKinesisVideoClient));
 
     // Fix-up the name of the device if not specified
     if (pKinesisVideoClient->deviceInfo.name[0] == '\0') {
@@ -353,6 +430,7 @@ STATUS getKinesisVideoMetrics(CLIENT_HANDLE clientHandle, PClientMetrics pKinesi
     STATUS retStatus = STATUS_SUCCESS;
     UINT64 heapSize;
     UINT32 i, viewAllocationSize;
+    UINT32 totalClientRetryCount = 0;
     PKinesisVideoClient pKinesisVideoClient = FROM_CLIENT_HANDLE(clientHandle);
     BOOL releaseClientSemaphore = FALSE, locked = FALSE;
 
@@ -375,7 +453,7 @@ STATUS getKinesisVideoMetrics(CLIENT_HANDLE clientHandle, PClientMetrics pKinesi
     pKinesisVideoMetrics->totalContentViewsSize = 0;
     pKinesisVideoMetrics->totalTransferRate = 0;
     pKinesisVideoMetrics->totalFrameRate = 0;
-    //    pKinesisVideoMetrics->totalElementaryFrameRate = 0;
+    pKinesisVideoMetrics->totalElementaryFrameRate = 0;
 
     // Lock the client streams list lock because we're iterating over
     pKinesisVideoClient->clientCallbacks.lockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoClient->base.streamListLock);
@@ -385,6 +463,9 @@ STATUS getKinesisVideoMetrics(CLIENT_HANDLE clientHandle, PClientMetrics pKinesi
         if (NULL != pKinesisVideoClient->streams[i]) {
             CHK_STATUS(contentViewGetAllocationSize(pKinesisVideoClient->streams[i]->pView, &viewAllocationSize));
             switch (pKinesisVideoMetrics->version) {
+                case 2:
+                    totalClientRetryCount += pKinesisVideoClient->streams[i]->diagnostics.streamApiCallRetryCount;
+                    // explicit fall through since V2 would include V1 and V0 metrics as well
                 case 1:
                     pKinesisVideoMetrics->totalElementaryFrameRate += pKinesisVideoClient->streams[i]->diagnostics.elementaryFrameRate;
                     // explicit fall through since V1 would include V0 metrics as well
@@ -398,6 +479,8 @@ STATUS getKinesisVideoMetrics(CLIENT_HANDLE clientHandle, PClientMetrics pKinesi
             }
         }
     }
+
+    pKinesisVideoMetrics->clientAvgApiCallRetryCount = (DOUBLE) totalClientRetryCount / (DOUBLE) pKinesisVideoClient->deviceInfo.streamCount;
 
     // Unlock client streams list lock after iteration.
     pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoClient->base.streamListLock);
@@ -720,6 +803,7 @@ CleanUp:
  */
 STATUS freeKinesisVideoStream(PSTREAM_HANDLE pStreamHandle)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     BOOL releaseClientSemaphore = FALSE;
     PKinesisVideoStream pKinesisVideoStream;
@@ -769,6 +853,7 @@ CleanUp:
  */
 STATUS putKinesisVideoFrame(STREAM_HANDLE streamHandle, PFrame pFrame)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
     BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
@@ -818,6 +903,7 @@ CleanUp:
  */
 STATUS putKinesisVideoFragmentMetadata(STREAM_HANDLE streamHandle, PCHAR name, PCHAR value, BOOL persistent)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
     PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
@@ -851,12 +937,65 @@ CleanUp:
 }
 
 /**
+ * Puts an event & associated custom data into the Kinesis Video stream.
+ */
+
+STATUS putKinesisVideoEventMetadata(STREAM_HANDLE streamHandle, UINT32 event, PStreamEventMetadata pStreamEventMetadata)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    UINT8 iter = 0;
+    BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
+    PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
+
+    DLOGS("Put event into an Kinesis Video stream.");
+
+    CHK(pKinesisVideoStream != NULL && pKinesisVideoStream->pKinesisVideoClient != NULL, STATUS_NULL_ARG);
+    if (pStreamEventMetadata != NULL) {
+        CHK(pStreamEventMetadata->numberOfPairs <= MAX_EVENT_CUSTOM_PAIRS, STATUS_INVALID_ARG);
+        for (iter = 0; iter < pStreamEventMetadata->numberOfPairs; iter++) {
+            CHK(pStreamEventMetadata->names[iter] != NULL && pStreamEventMetadata->values[iter] != NULL, STATUS_NULL_ARG);
+        }
+        pStreamEventMetadata->version = STREAM_EVENT_METADATA_CURRENT_VERSION;
+    }
+
+    // check for valid events
+    if (event >= STREAM_EVENT_TYPE_LAST || event == STREAM_EVENT_TYPE_NONE) {
+        CHK(FALSE, STATUS_INVALID_ARG);
+    }
+
+    // Shutdown sequencer
+    CHK_STATUS(semaphoreAcquire(pKinesisVideoStream->pKinesisVideoClient->base.shutdownSemaphore, INFINITE_TIME_VALUE));
+    releaseClientSemaphore = TRUE;
+
+    CHK_STATUS(semaphoreAcquire(pKinesisVideoStream->base.shutdownSemaphore, INFINITE_TIME_VALUE));
+    releaseStreamSemaphore = TRUE;
+
+    CHK_STATUS(putEventMetadata(pKinesisVideoStream, event, pStreamEventMetadata));
+
+CleanUp:
+
+    if (releaseStreamSemaphore) {
+        semaphoreRelease(pKinesisVideoStream->base.shutdownSemaphore);
+    }
+
+    if (releaseClientSemaphore) {
+        semaphoreRelease(pKinesisVideoStream->pKinesisVideoClient->base.shutdownSemaphore);
+    }
+
+    CHK_LOG_ERR(retStatus);
+    LEAVES();
+    return retStatus;
+}
+
+/**
  * Stream format changed.
  *
  * NOTE: Currently, the format change should happen while it's not streaming.
  */
 STATUS kinesisVideoStreamFormatChanged(STREAM_HANDLE streamHandle, UINT32 codecPrivateDataSize, PBYTE codecPrivateData, UINT64 trackId)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
     BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
@@ -897,6 +1036,7 @@ CleanUp:
  */
 STATUS kinesisVideoStreamSetNalAdaptationFlags(STREAM_HANDLE streamHandle, UINT32 nalAdaptationFlags)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
     BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
@@ -936,6 +1076,7 @@ CleanUp:
  */
 STATUS getKinesisVideoStreamData(STREAM_HANDLE streamHandle, UPLOAD_HANDLE uploadHandle, PBYTE pBuffer, UINT32 bufferSize, PUINT32 pFilledSize)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     BOOL releaseClientSemaphore = FALSE, releaseStreamSemaphore = FALSE;
     PKinesisVideoStream pKinesisVideoStream = FROM_STREAM_HANDLE(streamHandle);
@@ -1542,6 +1683,9 @@ STATUS freeKinesisVideoClientInternal(PKinesisVideoClient pKinesisVideoClient, S
         // Reset the singleton instance
         gKinesisVideoClient = NULL;
     }
+
+    // Free retry strategy
+    freeClientRetryStrategy(pKinesisVideoClient);
 
     // Release the heap
     if (pKinesisVideoClient->pHeap) {
