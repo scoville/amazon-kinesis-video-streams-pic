@@ -288,7 +288,7 @@ typedef enum {
 /**
  * The representation of the Frame
  */
-typedef struct {
+typedef struct __Frame {
     UINT32 version;
 
     // Id of the frame
@@ -473,6 +473,8 @@ typedef UINT64 (*GetCurrentTimeFunc)(UINT64);
 // Public functions
 ////////////////////////////////////////////////////
 
+
+PUBLIC_API STATUS mkvgenHasStreamStarted(PMkvGenerator, PBOOL);
 /**
  * Create the MkvGenerator object
  *

@@ -149,7 +149,7 @@ STATUS fromNewClientState(UINT64 customData, PUINT64 pState)
     ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     PKinesisVideoClient pKinesisVideoClient = CLIENT_FROM_CUSTOM_DATA(customData);
-    UINT64 state;
+    UINT64 state = CLIENT_STATE_NEW;
 
     CHK(pKinesisVideoClient != NULL && pState != NULL, STATUS_NULL_ARG);
 
@@ -362,7 +362,9 @@ STATUS executeGetTokenClientState(UINT64 customData, UINT64 time)
     pKinesisVideoClient->base.serviceCallContext.pAuthInfo = &pKinesisVideoClient->certAuthInfo;
     pKinesisVideoClient->base.serviceCallContext.version = SERVICE_CALL_CONTEXT_CURRENT_VERSION;
     pKinesisVideoClient->base.serviceCallContext.customData = TO_CUSTOM_DATA(pKinesisVideoClient);
-    pKinesisVideoClient->base.serviceCallContext.timeout = SERVICE_CALL_DEFAULT_TIMEOUT;
+    pKinesisVideoClient->base.serviceCallContext.timeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallCompletionTimeout;
+    pKinesisVideoClient->base.serviceCallContext.connectionTimeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallConnectionTimeout;
+
     pKinesisVideoClient->base.serviceCallContext.callAfter = time;
 
     // Reset the call result
@@ -420,7 +422,9 @@ STATUS executeCreateClientState(UINT64 customData, UINT64 time)
     pKinesisVideoClient->base.serviceCallContext.pAuthInfo = &pKinesisVideoClient->tokenAuthInfo;
     pKinesisVideoClient->base.serviceCallContext.version = SERVICE_CALL_CONTEXT_CURRENT_VERSION;
     pKinesisVideoClient->base.serviceCallContext.customData = TO_CUSTOM_DATA(pKinesisVideoClient);
-    pKinesisVideoClient->base.serviceCallContext.timeout = SERVICE_CALL_DEFAULT_TIMEOUT;
+    pKinesisVideoClient->base.serviceCallContext.timeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallCompletionTimeout;
+    pKinesisVideoClient->base.serviceCallContext.connectionTimeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallConnectionTimeout;
+
     pKinesisVideoClient->base.serviceCallContext.callAfter = time;
 
     // Reset the call result
@@ -469,7 +473,9 @@ STATUS executeTagClientState(UINT64 customData, UINT64 time)
     pKinesisVideoClient->base.serviceCallContext.pAuthInfo = &pKinesisVideoClient->tokenAuthInfo;
     pKinesisVideoClient->base.serviceCallContext.version = SERVICE_CALL_CONTEXT_CURRENT_VERSION;
     pKinesisVideoClient->base.serviceCallContext.customData = TO_CUSTOM_DATA(pKinesisVideoClient);
-    pKinesisVideoClient->base.serviceCallContext.timeout = SERVICE_CALL_DEFAULT_TIMEOUT;
+    pKinesisVideoClient->base.serviceCallContext.timeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallCompletionTimeout;
+    pKinesisVideoClient->base.serviceCallContext.connectionTimeout = pKinesisVideoClient->deviceInfo.clientInfo.serviceCallConnectionTimeout;
+
     pKinesisVideoClient->base.serviceCallContext.callAfter = time;
 
     // Reset the call result
