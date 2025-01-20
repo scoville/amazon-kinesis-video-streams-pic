@@ -333,19 +333,19 @@ VOID fixupClientInfo(PClientInfo pClientInfo, PClientInfo pOrigClientInfo)
         }
     }
 
-    if(pClientInfo->serviceCallConnectionTimeout > pClientInfo->serviceCallCompletionTimeout) {
+    if (pClientInfo->serviceCallConnectionTimeout > pClientInfo->serviceCallCompletionTimeout) {
         DLOGW("Completion timeout should be more than connection timeout...setting to defaults");
         pClientInfo->serviceCallConnectionTimeout = SERVICE_CALL_DEFAULT_CONNECTION_TIMEOUT;
         pClientInfo->serviceCallCompletionTimeout = SERVICE_CALL_DEFAULT_TIMEOUT;
     }
 
-    if(pClientInfo->serviceCallConnectionTimeout == 0 || !IS_VALID_TIMESTAMP(pClientInfo->serviceCallConnectionTimeout)) {
+    if (pClientInfo->serviceCallConnectionTimeout == 0 || !IS_VALID_TIMESTAMP(pClientInfo->serviceCallConnectionTimeout)) {
         // Although curl sets default if the value is 0, the default is 300 seconds (5 minutes) which is very high
         DLOGW("Connection timeout is invalid...setting to default");
         pClientInfo->serviceCallConnectionTimeout = SERVICE_CALL_DEFAULT_CONNECTION_TIMEOUT;
     }
 
-    if(pClientInfo->serviceCallCompletionTimeout == 0 || !IS_VALID_TIMESTAMP(pClientInfo->serviceCallCompletionTimeout)) {
+    if (pClientInfo->serviceCallCompletionTimeout == 0 || !IS_VALID_TIMESTAMP(pClientInfo->serviceCallCompletionTimeout)) {
         DLOGW("Completion timeout is invalid...setting to default");
         // If 0, it means there is no timeout on completion of the curl call which could be dangerous
         pClientInfo->serviceCallCompletionTimeout = SERVICE_CALL_DEFAULT_TIMEOUT;
@@ -372,7 +372,7 @@ VOID fixupClientInfo(PClientInfo pClientInfo, PClientInfo pOrigClientInfo)
         pClientInfo->offlineBufferAvailabilityTimeout = MAX_BLOCKING_PUT_WAIT;
     }
 
-    if (pClientInfo->loggerLogLevel == 0 || pClientInfo->loggerLogLevel > LOG_LEVEL_SILENT) {
+    if (pClientInfo->loggerLogLevel == 0 || pClientInfo->loggerLogLevel > LOG_LEVEL_PROFILE) {
         pClientInfo->loggerLogLevel = LOG_LEVEL_WARN;
     }
 

@@ -193,7 +193,7 @@ STATUS createStream(PKinesisVideoClient pKinesisVideoClient, PStreamInfo pStream
     pKinesisVideoStream->streamInfo.streamCaps.replayDuration = MIN(pStreamInfo->streamCaps.bufferDuration, pStreamInfo->streamCaps.replayDuration);
 
     // Set the tags pointer to point after the KinesisVideoStream struct
-    pKinesisVideoStream->streamInfo.tags = (PTag)((PBYTE)(pKinesisVideoStream + 1));
+    pKinesisVideoStream->streamInfo.tags = (PTag) ((PBYTE) (pKinesisVideoStream + 1));
 
     // Package the tags after the structure
     CHK_STATUS(packageTags(pStreamInfo->tagCount, pStreamInfo->tags, tagsSize, pKinesisVideoStream->streamInfo.tags, &tagsSize));
@@ -205,7 +205,7 @@ STATUS createStream(PKinesisVideoClient pKinesisVideoClient, PStreamInfo pStream
     if (pStreamInfo->streamCaps.segmentUuid == NULL) {
         for (i = 0; i < MKV_SEGMENT_UUID_LEN; i++) {
             pKinesisVideoStream->streamInfo.streamCaps.segmentUuid[i] =
-                ((BYTE)(pKinesisVideoClient->clientCallbacks.getRandomNumberFn(pKinesisVideoClient->clientCallbacks.customData) % 0x100));
+                ((BYTE) (pKinesisVideoClient->clientCallbacks.getRandomNumberFn(pKinesisVideoClient->clientCallbacks.customData) % 0x100));
         }
     } else {
         MEMCPY(pKinesisVideoStream->streamInfo.streamCaps.segmentUuid, pStreamInfo->streamCaps.segmentUuid, MKV_SEGMENT_UUID_LEN);
@@ -226,7 +226,7 @@ STATUS createStream(PKinesisVideoClient pKinesisVideoClient, PStreamInfo pStream
     }
 
     // Move pCurPnt to the end of pKinesisVideoStream->streamInfo.streamCaps.trackInfoList
-    pCurPnt = (PBYTE)(pKinesisVideoStream->streamInfo.streamCaps.trackInfoList + pKinesisVideoStream->streamInfo.streamCaps.trackInfoCount);
+    pCurPnt = (PBYTE) (pKinesisVideoStream->streamInfo.streamCaps.trackInfoList + pKinesisVideoStream->streamInfo.streamCaps.trackInfoCount);
 
     // Calculate the max items in the view
     maxViewItems = calculateViewItemCount(&pKinesisVideoStream->streamInfo);
@@ -246,9 +246,9 @@ STATUS createStream(PKinesisVideoClient pKinesisVideoClient, PStreamInfo pStream
     CHK_STATUS(generateEosMetadata(pKinesisVideoStream));
 
     // Create the state machine
-    CHK_STATUS(createStateMachine(STREAM_STATE_MACHINE_STATES, STREAM_STATE_MACHINE_STATE_COUNT, TO_CUSTOM_DATA(pKinesisVideoStream),
-                                  pKinesisVideoClient->clientCallbacks.getCurrentTimeFn, pKinesisVideoClient->clientCallbacks.customData,
-                                  &pStateMachine));
+    CHK_STATUS(createStateMachineWithName(STREAM_STATE_MACHINE_STATES, STREAM_STATE_MACHINE_STATE_COUNT, TO_CUSTOM_DATA(pKinesisVideoStream),
+                                          pKinesisVideoClient->clientCallbacks.getCurrentTimeFn, pKinesisVideoClient->clientCallbacks.customData,
+                                          STREAM_STATE_MACHINE_NAME, &pStateMachine));
     pKinesisVideoStream->base.pStateMachine = pStateMachine;
 
     // Create the stream upload handle queue
@@ -297,7 +297,7 @@ STATUS createStream(PKinesisVideoClient pKinesisVideoClient, PStreamInfo pStream
         pKinesisVideoStream->diagnostics.createTime + pKinesisVideoClient->deviceInfo.clientInfo.metricLoggingPeriod;
 
     // Call to transition the state machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -363,8 +363,15 @@ STATUS freeStream(PKinesisVideoStream pKinesisVideoStream)
     freeMetadataTracker(&pKinesisVideoStream->eosTracker);
     freeMetadataTracker(&pKinesisVideoStream->metadataTracker);
 
+    // unlock the stream freeFrameOrderCoordinator acquires the FrameOrderCoordinator mutex, we cannot acquire this
+    // mutex while holding the stream mutex or else we will deadlock with putFrame which first acquires
+    // FrameOrderCoordinator mutex and then the stream mutex
+    pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoStream->base.lock);
+
     // Free FrameOrderCoordinator
     freeFrameOrderCoordinator(pKinesisVideoStream, &pKinesisVideoStream->pFrameOrderCoordinator);
+
+    pKinesisVideoClient->clientCallbacks.lockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoStream->base.lock);
 
     // Lock the client to update the streams
     pKinesisVideoClient->clientCallbacks.lockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoClient->base.lock);
@@ -809,7 +816,7 @@ STATUS putFrame(PKinesisVideoStream pKinesisVideoStream, PFrame pFrame)
     // NOTE: If the connection has been reset we need to start from a new header
     if (pKinesisVideoStream->streamState == STREAM_STATE_NEW && pKinesisVideoStream->streamReady) {
         // Step the state machine once to get out of the Ready state
-        CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+        CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
     }
 
     // if we need to reset the generator on the next key frame (during the rotation only)
@@ -935,7 +942,7 @@ STATUS putFrame(PKinesisVideoStream pKinesisVideoStream, PFrame pFrame)
     // is not enough storage
     if (!IS_OFFLINE_STREAMING_MODE(pKinesisVideoStream->streamInfo.streamCaps.streamingType)) {
         remainingSize = pKinesisVideoClient->pHeap->heapLimit - pKinesisVideoClient->pHeap->heapSize;
-        thresholdPercent = (UINT32)(((DOUBLE) remainingSize / pKinesisVideoClient->pHeap->heapLimit) * 100);
+        thresholdPercent = (UINT32) (((DOUBLE) remainingSize / pKinesisVideoClient->pHeap->heapLimit) * 100);
 
         if (thresholdPercent <= STORAGE_PRESSURE_NOTIFICATION_THRESHOLD) {
             pKinesisVideoStream->diagnostics.storagePressures++;
@@ -956,7 +963,7 @@ STATUS putFrame(PKinesisVideoStream pKinesisVideoStream, PFrame pFrame)
 
             // Check for buffer duration pressure. Note that streamCaps.bufferDuration will never be 0.
             remainingDuration = pKinesisVideoStream->streamInfo.streamCaps.bufferDuration - windowDuration;
-            thresholdPercent = (UINT32)(((DOUBLE) remainingDuration / pKinesisVideoStream->streamInfo.streamCaps.bufferDuration) * 100);
+            thresholdPercent = (UINT32) (((DOUBLE) remainingDuration / pKinesisVideoStream->streamInfo.streamCaps.bufferDuration) * 100);
             if (thresholdPercent <= BUFFER_DURATION_PRESSURE_NOTIFICATION_THRESHOLD) {
                 pKinesisVideoStream->diagnostics.bufferPressures++;
 
@@ -1087,7 +1094,7 @@ STATUS putFrame(PKinesisVideoStream pKinesisVideoStream, PFrame pFrame)
         if (pTrackInfo != NULL && pTrackInfo->trackType == MKV_TRACK_INFO_TYPE_VIDEO) {
             if (!CHECK_ITEM_STREAM_START(itemFlags)) {
                 // Calculate the delta time in seconds
-                deltaInSeconds = (DOUBLE)(currentTime - pKinesisVideoStream->diagnostics.lastFrameRateTimestamp) / HUNDREDS_OF_NANOS_IN_A_SECOND;
+                deltaInSeconds = (DOUBLE) (currentTime - pKinesisVideoStream->diagnostics.lastFrameRateTimestamp) / HUNDREDS_OF_NANOS_IN_A_SECOND;
                 if (deltaInSeconds != 0) {
                     frameRate = 1 / deltaInSeconds;
 
@@ -1098,7 +1105,7 @@ STATUS putFrame(PKinesisVideoStream pKinesisVideoStream, PFrame pFrame)
 
                 // Update elementaryFrameRate.
                 deltaInSeconds =
-                    (DOUBLE)(pFrame->presentationTs - pKinesisVideoStream->diagnostics.previousFrameRatePts) / HUNDREDS_OF_NANOS_IN_A_SECOND;
+                    (DOUBLE) (pFrame->presentationTs - pKinesisVideoStream->diagnostics.previousFrameRatePts) / HUNDREDS_OF_NANOS_IN_A_SECOND;
                 if (deltaInSeconds != 0) {
                     pKinesisVideoStream->diagnostics.elementaryFrameRate = 1 / deltaInSeconds;
                 }
@@ -1261,16 +1268,18 @@ STATUS getStreamData(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HANDLE uplo
             // Set the state to terminated and early return with the EOS with the right handle
             pUploadHandleInfo->state = UPLOAD_HANDLE_STATE_TERMINATED;
 
-            DLOGI("[%s] Indicating an EOS after last persisted ACK is received for stream upload handle %" PRIu64, pKinesisVideoStream->streamInfo.name, uploadHandle);
+            DLOGI("[%s] Indicating an EOS after last persisted ACK is received for stream upload handle %" PRIu64,
+                  pKinesisVideoStream->streamInfo.name, uploadHandle);
             CHK(FALSE, STATUS_END_OF_STREAM);
 
         case UPLOAD_HANDLE_STATE_TERMINATED:
             // This path get invoked if a connection get terminated by calling reset connection
-            DLOGW("[%s] Indicating an end-of-stream for a terminated stream upload handle %", PRIu64, pKinesisVideoStream->streamInfo.name, uploadHandle);
+            DLOGW("[%s] Indicating an end-of-stream for a terminated stream upload handle %" PRIu64, pKinesisVideoStream->streamInfo.name,
+                  uploadHandle);
             CHK(FALSE, STATUS_END_OF_STREAM);
 
         case UPLOAD_HANDLE_STATE_ERROR:
-            DLOGW("[%s] Indicating an abort for a errored stream upload handle %", PRIu64, pKinesisVideoStream->streamInfo.name, uploadHandle);
+            DLOGW("[%s] Indicating an abort for a errored stream upload handle %" PRIu64, pKinesisVideoStream->streamInfo.name, uploadHandle);
             CHK(FALSE, STATUS_UPLOAD_HANDLE_ABORTED);
         default:
             // no-op for other UPLOAD_HANDLE states
@@ -1318,8 +1327,8 @@ STATUS getStreamData(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HANDLE uplo
                     }
 
                     pUploadHandleInfo->state = UPLOAD_HANDLE_STATE_AWAITING_ACK;
-                    DLOGI("[%s] Handle %" PRIu64 " waiting for last persisted ack with ts %" PRIu64, pKinesisVideoStream->streamInfo.name, pUploadHandleInfo->handle,
-                          pUploadHandleInfo->lastFragmentTs);
+                    DLOGI("[%s] Handle %" PRIu64 " waiting for last persisted ack with ts %" PRIu64, pKinesisVideoStream->streamInfo.name,
+                          pUploadHandleInfo->handle, pUploadHandleInfo->lastFragmentTs);
 
                     // Will terminate later after the ACK is received
                     CHK(FALSE, STATUS_AWAITING_PERSISTED_ACK);
@@ -1478,7 +1487,7 @@ CleanUp:
 
         if (!restarted) {
             // Calculate the delta time in seconds
-            deltaInSeconds = (DOUBLE)(currentTime - pKinesisVideoStream->diagnostics.lastTransferRateTimestamp) / HUNDREDS_OF_NANOS_IN_A_SECOND;
+            deltaInSeconds = (DOUBLE) (currentTime - pKinesisVideoStream->diagnostics.lastTransferRateTimestamp) / HUNDREDS_OF_NANOS_IN_A_SECOND;
 
             if (deltaInSeconds > TRANSFER_RATE_MEASURING_INTERVAL_EPSILON) {
                 transferRate = pKinesisVideoStream->diagnostics.accumulatedByteCount / deltaInSeconds;
@@ -1765,7 +1774,7 @@ STATUS checkForAvailability(PKinesisVideoStream pKinesisVideoStream, UINT32 allo
     // Check if we have enough space available. Adding maxFrameSizeSeen to handle fragmentation as well as when curl thread needs to alloc space for
     // sending data.
     availableHeapSize = pKinesisVideoClient->deviceInfo.storageInfo.storageSize - heapSize - MAX_ALLOCATION_OVERHEAD_SIZE -
-        (UINT64)(pKinesisVideoStream->maxFrameSizeSeen * FRAME_ALLOC_FRAGMENTATION_FACTOR);
+        (UINT64) (pKinesisVideoStream->maxFrameSizeSeen * FRAME_ALLOC_FRAGMENTATION_FACTOR);
 
     // Early return if storage space is unavailable.
     CHK(availableHeapSize >= allocationSize, STATUS_SUCCESS);
@@ -1918,10 +1927,13 @@ STATUS putEventMetadata(PKinesisVideoStream pKinesisVideoStream, UINT32 event, P
         for (iter = 0; iter < pMetadata->numberOfPairs; iter++) {
             CHK(0 != STRNCMP(AWS_INTERNAL_METADATA_PREFIX, pMetadata->names[iter], (SIZEOF(AWS_INTERNAL_METADATA_PREFIX) - 1) / SIZEOF(CHAR)),
                 STATUS_INVALID_METADATA_NAME);
+            CHK(STRLEN(pMetadata->names[iter]) <= MKV_MAX_TAG_NAME_LEN, STATUS_INVALID_IMAGE_METADATA_KEY_LENGTH);
+            CHK(STRLEN(pMetadata->values[iter]) <= MKV_MAX_TAG_VALUE_LEN, STATUS_INVALID_IMAGE_METADATA_VALUE_LENGTH);
         }
         if (pMetadata->imagePrefix != NULL) {
             CHK(0 != STRNCMP(AWS_INTERNAL_METADATA_PREFIX, pMetadata->imagePrefix, (SIZEOF(AWS_INTERNAL_METADATA_PREFIX) - 1) / SIZEOF(CHAR)),
                 STATUS_INVALID_METADATA_NAME);
+            CHK(STRLEN(pMetadata->imagePrefix) <= MAX_IMAGE_PREFIX_LENGTH, STATUS_INVALID_IMAGE_PREFIX_LENGTH);
         }
         neededNodes += pMetadata->numberOfPairs;
     }
@@ -2508,12 +2520,12 @@ UINT32 calculateViewItemCount(PStreamInfo pStreamInfo)
         case STREAMING_TYPE_REALTIME:
         case STREAMING_TYPE_OFFLINE:
             // Calculate the number of frames for the duration of the buffer.
-            viewItemCount = pStreamInfo->streamCaps.frameRate * ((UINT32)(pStreamInfo->streamCaps.bufferDuration / HUNDREDS_OF_NANOS_IN_A_SECOND));
+            viewItemCount = pStreamInfo->streamCaps.frameRate * ((UINT32) (pStreamInfo->streamCaps.bufferDuration / HUNDREDS_OF_NANOS_IN_A_SECOND));
             break;
 
         case STREAMING_TYPE_NEAR_REALTIME:
             // Calculate the number of the fragments in the buffer.
-            viewItemCount = (UINT32)(pStreamInfo->streamCaps.bufferDuration / pStreamInfo->streamCaps.fragmentDuration);
+            viewItemCount = (UINT32) (pStreamInfo->streamCaps.bufferDuration / pStreamInfo->streamCaps.fragmentDuration);
             break;
     }
 
@@ -2723,7 +2735,8 @@ CleanUp:
 
     // Set the current back if we had modified it
     if (setCurrentBack && STATUS_FAILED((setViewStatus = contentViewSetCurrentIndex(pKinesisVideoStream->pView, curItemIndex)))) {
-        DLOGW("[%s] Failed to set the current back to index %" PRIu64 " with status 0x%08x", pKinesisVideoStream->streamInfo.name, curItemIndex, setViewStatus);
+        DLOGW("[%s] Failed to set the current back to index %" PRIu64 " with status 0x%08x", pKinesisVideoStream->streamInfo.name, curItemIndex,
+              setViewStatus);
     }
 
     LEAVES();
@@ -3288,7 +3301,7 @@ STATUS createSerializedMetadata(PCHAR name, PCHAR value, BOOL persistent, UINT32
     pSerializedMetadata->parent = parent;
 
     // Set the name to point to the end of the structure
-    pSerializedMetadata->name = (PCHAR)(pSerializedMetadata + 1);
+    pSerializedMetadata->name = (PCHAR) (pSerializedMetadata + 1);
 
     // Copy the name of the metadata
     STRCPY(pSerializedMetadata->name, name);
@@ -3538,7 +3551,7 @@ STATUS resetStream(PKinesisVideoStream pKinesisVideoStream)
     }
 
     // step out of stopped state
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
     // Unlock the stream
     pKinesisVideoClient->clientCallbacks.unlockMutexFn(pKinesisVideoClient->clientCallbacks.customData, pKinesisVideoStream->base.lock);

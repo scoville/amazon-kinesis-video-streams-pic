@@ -245,6 +245,20 @@ STATUS describeStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CAL
         // Check the rest of the values and warn on mismatch
         // NOTE: We need to compare non-empty KMS keys only as the default is used when none is specified
 
+        if ((pKinesisVideoStream->streamInfo.kmsKeyId[0] != '\0') &&
+            (0 != STRNCMP(pKinesisVideoStream->streamInfo.kmsKeyId, streamDescription.kmsKeyId, MAX_ARN_LEN))) {
+            DLOGW("KMS key ID returned from the DescribeStream call doesn't match the one specified in the StreamInfo");
+        }
+
+        if (pKinesisVideoStream->streamInfo.retention != streamDescription.retention) {
+            DLOGW("Retention period returned from the DescribeStream call doesn't match the one specified in the StreamInfo");
+        }
+
+        if (0 != STRNCMP(pKinesisVideoStream->streamInfo.streamCaps.contentType, streamDescription.contentType, MAX_CONTENT_TYPE_LEN)) {
+            DLOGW("Content type returned from the DescribeStream(%s) call doesn't match the one specified in the StreamInfo(%s)",
+                  streamDescription.contentType, pKinesisVideoStream->streamInfo.streamCaps.contentType);
+        }
+
         if (0 != STRNCMP(pKinesisVideoStream->streamInfo.name, streamDescription.streamName, MAX_STREAM_NAME_LEN)) {
             DLOGW("Stream name returned from the DescribeStream(%s) call doesn't match the one specified in the StreamInfo(%s)",
                   streamDescription.streamName, pKinesisVideoStream->streamInfo.name);
@@ -252,15 +266,18 @@ STATUS describeStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CAL
 
         if ((pKinesisVideoStream->streamInfo.kmsKeyId[0] != '\0') &&
             (0 != STRNCMP(pKinesisVideoStream->streamInfo.kmsKeyId, streamDescription.kmsKeyId, MAX_ARN_LEN))) {
-            DLOGW("[%s] KMS key ID returned from the DescribeStream call doesn't match the one specified in the StreamInfo", pKinesisVideoStream->streamInfo.name);
+            DLOGW("[%s] KMS key ID returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
+                  pKinesisVideoStream->streamInfo.name);
         }
 
         if (pKinesisVideoStream->streamInfo.retention != streamDescription.retention) {
-            DLOGW("[%s] Retention period returned from the DescribeStream call doesn't match the one specified in the StreamInfo", pKinesisVideoStream->streamInfo.name);
+            DLOGW("[%s] Retention period returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
+                  pKinesisVideoStream->streamInfo.name);
         }
 
         if (0 != STRNCMP(pKinesisVideoStream->streamInfo.streamCaps.contentType, streamDescription.contentType, MAX_CONTENT_TYPE_LEN)) {
-            DLOGW("[%s] Content type returned from the DescribeStream call doesn't match the one specified in the StreamInfo", pKinesisVideoStream->streamInfo.name);
+            DLOGW("[%s] Content type returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
+                  pKinesisVideoStream->streamInfo.name);
         }
 
         // Store the values we need
@@ -269,7 +286,7 @@ STATUS describeStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CAL
     }
 
     // Step the machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -330,7 +347,7 @@ STATUS createStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CALL_
     }
 
     // Step the machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -415,7 +432,7 @@ STATUS getStreamingTokenResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_
     }
 
     // Step the machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -476,7 +493,7 @@ STATUS getStreamingEndpointResult(PKinesisVideoStream pKinesisVideoStream, SERVI
     }
 
     // Step the machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -551,7 +568,7 @@ STATUS putStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CALL_RES
     CHK_STATUS(stackQueueEnqueue(pKinesisVideoStream->pUploadInfoQueue, (UINT64) pUploadHandleInfo));
 
     // Step the machine
-    CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+    CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
 
 CleanUp:
 
@@ -608,18 +625,19 @@ STATUS tagStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CALL_RES
     pKinesisVideoStream->base.result = callResult;
 
     // Step the machine
-    retStatus = stepStateMachine(pKinesisVideoStream->base.pStateMachine);
+    retStatus = iterateStreamStateMachine(pKinesisVideoStream);
     CHK(retStatus == STATUS_SUCCESS || retStatus == STATUS_TAG_STREAM_CALL_FAILED, retStatus);
 
     // Override tagStream failure because it is not critical to streaming.
     if (retStatus == STATUS_TAG_STREAM_CALL_FAILED) {
-        DLOGW("[%s] tagResourceResultEvent failed with status 0x%08x. Overriding service call result to move to next state", pKinesisVideoStream->streamInfo.name, retStatus);
+        DLOGW("[%s] tagResourceResultEvent failed with status 0x%08x. Overriding service call result to move to next state",
+              pKinesisVideoStream->streamInfo.name, retStatus);
         pKinesisVideoClient->clientCallbacks.streamErrorReportFn(pKinesisVideoClient->clientCallbacks.customData,
                                                                  TO_STREAM_HANDLE(pKinesisVideoStream), INVALID_UPLOAD_HANDLE_VALUE,
                                                                  INVALID_TIMESTAMP_VALUE, STATUS_TAG_STREAM_CALL_FAILED);
 
         pKinesisVideoStream->base.result = SERVICE_CALL_RESULT_OK;
-        retStatus = stepStateMachine(pKinesisVideoStream->base.pStateMachine);
+        retStatus = iterateStreamStateMachine(pKinesisVideoStream);
     }
 
 CleanUp:
@@ -704,7 +722,7 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
                         pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_NOT_IN_USE;
 
                         DLOGW("[%s] Last fragment with timestamp %" PRIu64 " for upload handle %" PRIu64 " might not be fully persisted",
-                                pKinesisVideoStream->streamInfo.name, pUploadHandleInfo->lastFragmentTs, uploadHandle);
+                              pKinesisVideoStream->streamInfo.name, pUploadHandleInfo->lastFragmentTs, uploadHandle);
 
                         if (pUploadHandleInfo->state == UPLOAD_HANDLE_STATE_AWAITING_ACK &&
                             pKinesisVideoClient->clientCallbacks.streamErrorReportFn != NULL) {
@@ -765,7 +783,7 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
         pKinesisVideoStream->base.result = callResult;
 
         // Step the machine
-        CHK_STATUS(stepStateMachine(pKinesisVideoStream->base.pStateMachine));
+        CHK_STATUS(iterateStreamStateMachine(pKinesisVideoStream));
     }
 
 CleanUp:

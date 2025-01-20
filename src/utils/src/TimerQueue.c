@@ -313,6 +313,33 @@ CleanUp:
     return retStatus;
 }
 
+PUBLIC_API STATUS timerQueueKick(TIMER_QUEUE_HANDLE handle, UINT32 timerId)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    PTimerQueue pTimerQueue = FROM_TIMER_QUEUE_HANDLE(handle);
+    BOOL locked = FALSE;
+
+    CHK(pTimerQueue != NULL, STATUS_NULL_ARG);
+    CHK(timerId < pTimerQueue->maxTimerCount, STATUS_INVALID_ARG);
+
+    MUTEX_LOCK(pTimerQueue->executorLock);
+    locked = TRUE;
+
+    // change invoke time & signal to trigger timer.
+    pTimerQueue->pTimers[timerId].invokeTime = 0;
+    CVAR_SIGNAL(pTimerQueue->executorCvar);
+
+CleanUp:
+
+    if (locked) {
+        MUTEX_UNLOCK(pTimerQueue->executorLock);
+    }
+
+    LEAVES();
+    return retStatus;
+}
+
 PUBLIC_API STATUS timerQueueShutdown(TIMER_QUEUE_HANDLE handle)
 {
     ENTERS();
@@ -403,7 +430,7 @@ STATUS timerQueueCreateInternal(UINT32 maxTimers, PTimerQueue* ppTimerQueue)
     CHK(IS_VALID_CVAR_VALUE(pTimerQueue->executorCvar), STATUS_INVALID_OPERATION);
 
     // Set the timer entry array past the end of the main allocation
-    pTimerQueue->pTimers = (PTimerEntry)(pTimerQueue + 1);
+    pTimerQueue->pTimers = (PTimerEntry) (pTimerQueue + 1);
 
     // Block threads start
     MUTEX_LOCK(pTimerQueue->startLock);
@@ -610,5 +637,5 @@ CleanUp:
     }
 
     LEAVES();
-    return (PVOID)(ULONG_PTR) retStatus;
+    return (PVOID) (ULONG_PTR) retStatus;
 }

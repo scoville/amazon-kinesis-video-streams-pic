@@ -6,7 +6,7 @@
 <h4 align="center">Platform Indendent Code for Amazon Kinesis Video Streams </h4>
 
 <p align="center">
-  <a href="https://travis-ci.org/awslabs/amazon-kinesis-video-streams-pic"> <img src="https://travis-ci.org/awslabs/amazon-kinesis-video-streams-pic.svg?branch=master" alt="Build Status"> </a>
+  <a href="https://github.com/awslabs/amazon-kinesis-video-streams-pic/actions/workflows/ci.yml"> <img src=https://github.com/awslabs/amazon-kinesis-video-streams-pic/actions/workflows/ci.yml/badge.svg </a>
   <a href="https://codecov.io/gh/awslabs/amazon-kinesis-video-streams-pic"> <img src="https://codecov.io/gh/awslabs/amazon-kinesis-video-streams-pic/branch/master/graph/badge.svg" alt="Coverage Status"> </a>
 </p>
 
@@ -46,15 +46,17 @@ If you wish to cross-compile `CC` and `CXX` are respected when building the libr
 You can pass the following options to `cmake ..`
 
 * `-DBUILD_DEPENDENCIES` -- Whether or not to build depending libraries from source
-* `-DBUILD_TEST=TRUE` -- Build unit/integration tests, may be useful for confirm support for your device. `./kvspic_test`
+* `-DBUILD_TEST=TRUE` -- Build unit/integration tests, may be useful for confirm support for your device. `./tst/kvspic_test`
 * `-DCODE_COVERAGE` --  Enable coverage reporting
 * `-DCOMPILER_WARNINGS` -- Enable all compiler warnings
 * `-DADDRESS_SANITIZER` -- Build with AddressSanitizer
 * `-DMEMORY_SANITIZER` --  Build with MemorySanitizer
 * `-DTHREAD_SANITIZER` -- Build with ThreadSanitizer
 * `-DUNDEFINED_BEHAVIOR_SANITIZER` Build with UndefinedBehaviorSanitizer
-* `-DBUILD_DEBUG_HEAP` Build debug heap with guard bands and validation. This is ONLY intended for low-level debugging purposes. Default is OFF
+* `-DBUILD_DEBUG_HEAP` Build debug heap with guard bands and validation. This is ONLY intended for low-level debugging purposes. Default is OFF.
 * `-DALIGNED_MEMORY_MODEL` Build for aligned memory model only devices. Default is OFF.
+* `-DCONSTRAINED_DEVICE` -- Sets the default stack size of threads to 512 KiB (0.5 MiB). Incompatible with `-DKVS_DEFAULT_STACK_SIZE`. Not available in Windows. Default is OFF.
+* `-DKVS_DEFAULT_STACK_SIZE` -- Value in bytes for default stack size of threads. Incompatible with `-DCONSTRAINED_DEVICE`. Default is system default.
 
 ### Build
 To build the library run make in the build directory you executed CMake.
