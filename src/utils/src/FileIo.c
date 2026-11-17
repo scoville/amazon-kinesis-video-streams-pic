@@ -12,12 +12,14 @@
  */
 STATUS readFile(PCHAR filePath, BOOL binMode, PBYTE pBuffer, PUINT64 pSize)
 {
+    ENTERS();
     UINT64 fileLen;
     STATUS retStatus = STATUS_SUCCESS;
     FILE* fp = NULL;
 
     CHK(filePath != NULL && pSize != NULL, STATUS_NULL_ARG);
 
+    DLOGV("Opening file: %s", filePath);
     fp = FOPEN(filePath, binMode ? "rb" : "r");
 
     CHK(fp != NULL, STATUS_OPEN_FILE_FAILED);
@@ -52,12 +54,14 @@ STATUS readFile(PCHAR filePath, BOOL binMode, PBYTE pBuffer, PUINT64 pSize)
     }
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
     if (fp != NULL) {
         FCLOSE(fp);
         fp = NULL;
     }
 
+    LEAVES();
     return retStatus;
 }
 
@@ -75,6 +79,7 @@ CleanUp:
  */
 STATUS readFileSegment(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offset, UINT64 readSize)
 {
+    ENTERS();
     UINT64 fileLen;
     STATUS retStatus = STATUS_SUCCESS;
     FILE* fp = NULL;
@@ -82,6 +87,7 @@ STATUS readFileSegment(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offse
 
     CHK(filePath != NULL && pBuffer != NULL && readSize != 0, STATUS_NULL_ARG);
 
+    DLOGV("Opening file: %s", filePath);
     fp = FOPEN(filePath, binMode ? "rb" : "r");
 
     CHK(fp != NULL, STATUS_OPEN_FILE_FAILED);
@@ -112,18 +118,59 @@ STATUS readFileSegment(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offse
     }
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
     if (fp != NULL) {
         FCLOSE(fp);
         fp = NULL;
     }
 
+    LEAVES();
+    return retStatus;
+}
+
+/**
+ * Write contents pointed to by pBuffer to the given filePath. Logs will be printed within this function.
+ * WARNING: This must NOT be called by the file logger.
+ *
+ * Parameters:
+ *     filePath - file path to write to
+ *     binMode  - TRUE to read file stream as binary; FALSE to read as a normal text file
+ *     append   - TRUE to append; FALSE to overwrite
+ *     pBuffer  - memory location whose contents should be written to the file
+ *     size     - number of bytes that should be written to the file
+ */
+STATUS writeFileWithLogging(PCHAR filePath, BOOL binMode, BOOL append, PBYTE pBuffer, UINT64 size)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    FILE* fp = NULL;
+
+    CHK(filePath != NULL && pBuffer != NULL, STATUS_NULL_ARG);
+
+    DLOGV("Opening file: %s", filePath);
+    fp = FOPEN(filePath, binMode ? (append ? "ab" : "wb") : (append ? "a" : "w"));
+
+    CHK(fp != NULL, STATUS_OPEN_FILE_FAILED);
+
+    // Write the buffer to the file
+    CHK(FWRITE(pBuffer, (SIZE_T) size, 1, fp) == 1, STATUS_WRITE_TO_FILE_FAILED);
+
+CleanUp:
+    CHK_LOG_ERR(retStatus);
+
+    if (fp != NULL) {
+        FCLOSE(fp);
+        fp = NULL;
+    }
+
+    LEAVES();
     return retStatus;
 }
 
 /**
  * Write contents pointed to by pBuffer to the given filePath.
- *
+ * WARNING: Logs must NOT be printed within this function.
  * Parameters:
  *     filePath - file path to write to
  *     binMode  - TRUE to read file stream as binary; FALSE to read as a normal text file
@@ -167,6 +214,7 @@ CleanUp:
  */
 STATUS updateFile(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offset, UINT64 size)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     FILE* fp = NULL;
     UINT32 i;
@@ -174,6 +222,7 @@ STATUS updateFile(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offset, UI
 
     CHK(filePath != NULL && pBuffer != NULL, STATUS_NULL_ARG);
 
+    DLOGV("Opening file: %s", filePath);
     fp = FOPEN(filePath, binMode ? "rb+" : "r+");
 
     CHK(fp != NULL, STATUS_OPEN_FILE_FAILED);
@@ -185,12 +234,14 @@ STATUS updateFile(PCHAR filePath, BOOL binMode, PBYTE pBuffer, UINT64 offset, UI
     }
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
     if (fp != NULL) {
         FCLOSE(fp);
         fp = NULL;
     }
 
+    LEAVES();
     return retStatus;
 }
 
@@ -206,12 +257,15 @@ CleanUp:
  */
 STATUS getFileLength(PCHAR filePath, PUINT64 pLength)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
 
     CHK_STATUS(readFile(filePath, TRUE, NULL, pLength));
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
+    LEAVES();
     return retStatus;
 }
 
@@ -227,6 +281,7 @@ CleanUp:
  */
 STATUS setFileLength(PCHAR filePath, UINT64 length)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     INT32 retVal, errCode, fileDesc;
 
@@ -284,7 +339,9 @@ STATUS setFileLength(PCHAR filePath, UINT64 length)
     }
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
+    LEAVES();
     return retStatus;
 }
 
@@ -297,7 +354,9 @@ CleanUp:
  */
 STATUS fileExists(PCHAR filePath, PBOOL pExists)
 {
+    ENTERS();
     if (filePath == NULL || pExists == NULL) {
+        LEAVES();
         return STATUS_NULL_ARG;
     }
 
@@ -305,6 +364,7 @@ STATUS fileExists(PCHAR filePath, PBOOL pExists)
     INT32 result = FSTAT(filePath, &st);
     *pExists = (result == 0);
 
+    LEAVES();
     return STATUS_SUCCESS;
 }
 
@@ -317,11 +377,13 @@ STATUS fileExists(PCHAR filePath, PBOOL pExists)
  */
 STATUS createFile(PCHAR filePath, UINT64 size)
 {
+    ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
     FILE* fp = NULL;
 
     CHK(filePath != NULL, STATUS_NULL_ARG);
 
+    DLOGD("Creating file: %s", filePath);
     fp = FOPEN(filePath, "w+b");
     CHK(fp != NULL, STATUS_OPEN_FILE_FAILED);
 
@@ -331,11 +393,13 @@ STATUS createFile(PCHAR filePath, UINT64 size)
     }
 
 CleanUp:
+    CHK_LOG_ERR(retStatus);
 
     if (fp != NULL) {
         FCLOSE(fp);
         fp = NULL;
     }
 
+    LEAVES();
     return retStatus;
 }

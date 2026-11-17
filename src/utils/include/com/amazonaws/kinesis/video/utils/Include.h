@@ -1684,20 +1684,20 @@ typedef struct __ExponentialBackoffRetryStrategyConfig {
     // to the application. For infinite retries, set this
     // to KVS_INFINITE_EXPONENTIAL_RETRIES.
     UINT32 maxRetryCount;
-    // Maximum retry wait time. Once the retry wait time
+    // Maximum retry wait time in milliseconds. Once the retry wait time
     // reaches this value, subsequent retries will wait for
     // maxRetryWaitTime (plus jitter).
     UINT64 maxRetryWaitTime;
-    // Factor for computing the exponential backoff wait time
+    // Factor for computing the exponential backoff wait time in milliseconds
     UINT64 retryFactorTime;
-    // The minimum time between two consecutive retries
+    // The minimum time (in milliseconds) between two consecutive retries
     // after which retry state will be reset i.e. retries
     // will start from initial retry state.
     UINT64 minTimeToResetRetryState;
     // Jitter type indicating how much jitter to be added
     // Default will be FULL_JITTER
     ExponentialBackoffJitterType jitterType;
-    // Factor determining random jitter value.
+    // Factor determining random jitter value (in milliseconds).
     // Jitter will be between [0, jitterFactor)
     // This parameter is only valid for jitter type FIXED_JITTER
     UINT32 jitterFactor;
@@ -2004,6 +2004,29 @@ PUBLIC_API STATUS threadpoolTryAdd(PThreadpool, startRoutine, PVOID);
  * @param - PVOID - IN - custom data to send to function pointer
  */
 PUBLIC_API STATUS threadpoolPush(PThreadpool, startRoutine, PVOID);
+
+/**
+ * @brief Checks if an environment variable is set to an enabled or disabled value, with a default if unset.
+ *
+ * Recognized enabled values: "1", "true", "on" (case-insensitive).
+ * Recognized disabled values: "0", "false", "off" (case-insensitive).
+ * Unset or unrecognized values return the provided default.
+ *
+ * @param - PCHAR - IN - The name of the environment variable to check for.
+ * @param - BOOL - IN - The default value to return if the variable is unset.
+ *
+ * @return - BOOL - TRUE/FALSE based on the variable value, or defaultVal if unset.
+ */
+PUBLIC_API BOOL isEnvVarEnabledWithDefault(PCHAR, BOOL);
+
+/**
+ * @brief Checks if an environment variable is enabled (default=OFF). Equivalent to isEnvVarEnabledWithDefault(envVarName, FALSE).
+ *
+ * @param - PCHAR - IN - The name of the environment variable to check for.
+ *
+ * @return - BOOL - TRUE if the environment variable is enabled, FALSE otherwise.
+ */
+PUBLIC_API BOOL isEnvVarEnabled(PCHAR);
 
 #ifdef __cplusplus
 }

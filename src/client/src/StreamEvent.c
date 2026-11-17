@@ -247,37 +247,23 @@ STATUS describeStreamResult(PKinesisVideoStream pKinesisVideoStream, SERVICE_CAL
 
         if ((pKinesisVideoStream->streamInfo.kmsKeyId[0] != '\0') &&
             (0 != STRNCMP(pKinesisVideoStream->streamInfo.kmsKeyId, streamDescription.kmsKeyId, MAX_ARN_LEN))) {
-            DLOGW("KMS key ID returned from the DescribeStream call doesn't match the one specified in the StreamInfo");
+            DLOGW("[%s] KMS key ID (%s) returned from the DescribeStream call doesn't match the one specified in the StreamInfo: (%s)",
+                  pKinesisVideoStream->streamInfo.name, streamDescription.kmsKeyId, pKinesisVideoStream->streamInfo.kmsKeyId);
         }
 
         if (pKinesisVideoStream->streamInfo.retention != streamDescription.retention) {
-            DLOGW("Retention period returned from the DescribeStream call doesn't match the one specified in the StreamInfo");
+            DLOGW("[%s] Retention period (%d) returned from the DescribeStream call doesn't match the one specified in the StreamInfo: (%d)",
+                  pKinesisVideoStream->streamInfo.name, streamDescription.retention, pKinesisVideoStream->streamInfo.retention);
         }
 
         if (0 != STRNCMP(pKinesisVideoStream->streamInfo.streamCaps.contentType, streamDescription.contentType, MAX_CONTENT_TYPE_LEN)) {
-            DLOGW("Content type returned from the DescribeStream(%s) call doesn't match the one specified in the StreamInfo(%s)",
-                  streamDescription.contentType, pKinesisVideoStream->streamInfo.streamCaps.contentType);
+            DLOGW("[%s] Content type (%d) returned from the DescribeStream call doesn't match the one specified in the StreamInfo: (%d)",
+                  pKinesisVideoStream->streamInfo.name, streamDescription.contentType, pKinesisVideoStream->streamInfo.streamCaps.contentType);
         }
 
         if (0 != STRNCMP(pKinesisVideoStream->streamInfo.name, streamDescription.streamName, MAX_STREAM_NAME_LEN)) {
-            DLOGW("Stream name returned from the DescribeStream(%s) call doesn't match the one specified in the StreamInfo(%s)",
-                  streamDescription.streamName, pKinesisVideoStream->streamInfo.name);
-        }
-
-        if ((pKinesisVideoStream->streamInfo.kmsKeyId[0] != '\0') &&
-            (0 != STRNCMP(pKinesisVideoStream->streamInfo.kmsKeyId, streamDescription.kmsKeyId, MAX_ARN_LEN))) {
-            DLOGW("[%s] KMS key ID returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
-                  pKinesisVideoStream->streamInfo.name);
-        }
-
-        if (pKinesisVideoStream->streamInfo.retention != streamDescription.retention) {
-            DLOGW("[%s] Retention period returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
-                  pKinesisVideoStream->streamInfo.name);
-        }
-
-        if (0 != STRNCMP(pKinesisVideoStream->streamInfo.streamCaps.contentType, streamDescription.contentType, MAX_CONTENT_TYPE_LEN)) {
-            DLOGW("[%s] Content type returned from the DescribeStream call doesn't match the one specified in the StreamInfo",
-                  pKinesisVideoStream->streamInfo.name);
+            DLOGW("[%s] Stream name returned from the DescribeStream (%s) call doesn't match the one specified in the StreamInfo: (%s)",
+                  pKinesisVideoStream->streamInfo.name, streamDescription.streamName, pKinesisVideoStream->streamInfo.name);
         }
 
         // Store the values we need
@@ -652,6 +638,23 @@ CleanUp:
 }
 
 /**
+ * Printable name for the per-stream upload connection state. Used only for logging.
+ */
+static PCHAR uploadConnectionStateName(UPLOAD_CONNECTION_STATE connectionState)
+{
+    switch (connectionState) {
+        case UPLOAD_CONNECTION_STATE_OK:
+            return (PCHAR) "OK";
+        case UPLOAD_CONNECTION_STATE_NOT_IN_USE:
+            return (PCHAR) "NOT_IN_USE";
+        case UPLOAD_CONNECTION_STATE_IN_USE:
+            return (PCHAR) "IN_USE";
+        default:
+            return (PCHAR) "NONE";
+    }
+}
+
+/**
  * Stream terminated notification
  */
 STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HANDLE uploadHandle, SERVICE_CALL_RESULT callResult,
@@ -665,6 +668,7 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
     UINT32 sessionCount = 0, i = 0;
     UINT64 item;
     BOOL locked = FALSE, spawnNewUploadSession = TRUE, uploadHandleNotUsed = FALSE;
+    UPLOAD_CONNECTION_STATE entryConnectionState = UPLOAD_CONNECTION_STATE_NONE;
 
     CHK(pKinesisVideoStream != NULL && pKinesisVideoStream->pKinesisVideoClient != NULL, STATUS_NULL_ARG);
     pKinesisVideoClient = pKinesisVideoStream->pKinesisVideoClient;
@@ -675,12 +679,16 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
 
     // We should handle the in-grace termination differently by not setting the terminated state
     if (SERVICE_CALL_STREAM_AUTH_IN_GRACE_PERIOD != callResult) {
-        // Set default to UPLOAD_CONNECTION_STATE_IN_USE which will trigger rollback
-        pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_IN_USE;
+        // connectionState is a property of the STREAM, not of any one upload handle. It records whether the
+        // next session to transmit owes a rollback and a fresh MKV header. Capture it on entry so the log
+        // below shows what this termination did to a decision that may have been made by an earlier handle.
+        entryConnectionState = pKinesisVideoStream->connectionState;
 
         // If invalid upload handle is specified, terminated all uploading session, and let
         // state machine spawn new session.
         if (!IS_VALID_UPLOAD_HANDLE(uploadHandle)) {
+            pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_IN_USE;
+
             CHK_STATUS(stackQueueGetCount(pKinesisVideoStream->pUploadInfoQueue, &sessionCount));
 
             for (i = 0; i < sessionCount; i++) {
@@ -701,6 +709,7 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
             pUploadHandleInfo = getStreamUploadInfo(pKinesisVideoStream, uploadHandle);
 
             if (pUploadHandleInfo == NULL) {
+                pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_IN_USE;
                 DLOGW("[%s] streamTerminatedEvent called for unknown upload handle %" PRIu64, pKinesisVideoStream->streamInfo.name, uploadHandle);
             } else {
                 // If the upload handle has not streamed any data, we can safely ignore this event.
@@ -710,10 +719,10 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
                 // Set the state to terminated
                 pUploadHandleInfo->state = UPLOAD_HANDLE_STATE_TERMINATED;
 
-                if (uploadHandleNotUsed) {
-                    // Need to indicate to the getStreamData to not rollback.
-                    pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_NOT_IN_USE;
-                } else {
+                // A handle that never transmitted has no rollback of its own, and must not clear one left
+                // pending by an earlier handle that did transmit.
+                // Only decide the state when it transmitted.
+                if (!uploadHandleNotUsed) {
                     pActiveUploadHandleInfo = getStreamUploadInfoWithState(pKinesisVideoStream, UPLOAD_HANDLE_STATE_ACTIVE);
 
                     if (pActiveUploadHandleInfo != NULL) {
@@ -730,6 +739,8 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
                                 pKinesisVideoClient->clientCallbacks.customData, TO_STREAM_HANDLE(pKinesisVideoStream), uploadHandle,
                                 pUploadHandleInfo->lastFragmentTs, STATUS_PUTMEDIA_LAST_PERSIST_ACK_NOT_RECEIVED);
                         }
+                    } else {
+                        pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_IN_USE;
                     }
                 }
 
@@ -758,6 +769,27 @@ STATUS streamTerminatedEvent(PKinesisVideoStream pKinesisVideoStream, UPLOAD_HAN
                 }
             }
         }
+
+        // A session stopped at a timecode base change leaves the send pointer parked on the boundary item with
+        // nothing sent from it, which is where its successor has to start. On a STOPPED stream a rollback from
+        // here cannot make progress: the successor starts behind the boundary, is stopped at the same item, and
+        // the rollback target never advances because no further ACK is coming, so the drain repeats until the
+        // stop timeout expires. Suppress it for that case only.
+        //
+        // The stopped test matters. On a live stream the same parked pointer also occurs when the connection
+        // drops while the session waits for the persisted ACKs of fragments it already sent. Those fragments are
+        // unacknowledged, so the successor genuinely owes a replay of them, and suppressing it would drop that
+        // content. There ACKs keep arriving and the rollback resolves on its own.
+        //
+        // This has to override whichever branch above ran, so it is applied last.
+        if (pKinesisVideoStream->streamStopped && IS_VALID_ALLOCATION_HANDLE(pKinesisVideoStream->curViewItem.viewItem.handle) &&
+            CHECK_ITEM_TIMECODE_BASE_START(pKinesisVideoStream->curViewItem.viewItem.flags) && pKinesisVideoStream->curViewItem.offset == 0) {
+            pKinesisVideoStream->connectionState = UPLOAD_CONNECTION_STATE_NOT_IN_USE;
+        }
+
+        DLOGD("[%s] Upload handle %" PRIu64 " terminated (result %u). Stream connectionState %s -> %s", pKinesisVideoStream->streamInfo.name,
+              uploadHandle, (UINT32) callResult, uploadConnectionStateName(entryConnectionState),
+              uploadConnectionStateName(pKinesisVideoStream->connectionState));
     }
 
     // if we had an auth failure then we will not exit early we need to retry auth
